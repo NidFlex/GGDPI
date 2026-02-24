@@ -12,7 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.ggdpi.app.service.GGDPILocalService
-import com.ggdpi.app.ui.screens.MainScreen
+import com.ggdpi.app.ui.navigation.NavGraph
 import com.ggdpi.app.ui.theme.GGDPITheme
 
 class MainActivity : ComponentActivity() {
@@ -36,7 +36,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
+                    NavGraph(
                         onRequestPermission = ::requestVpnPermission,
                         onStartBypass = ::startBypass,
                         onStopBypass = ::stopBypass
