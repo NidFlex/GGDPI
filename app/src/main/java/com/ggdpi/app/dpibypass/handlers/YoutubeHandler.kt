@@ -51,4 +51,8 @@ class YoutubeHandler {
         
         return newPacket
     }
+    // В каждый handler добавить те же три метода-заглушки:
+    fun process(packet: ByteArray, length: Int, strategy: DpiStrategy): ByteArray { return packet }
+    fun processTcp(packet: ByteArray, length: Int, strategy: DpiStrategy, sni: String?): ByteArray { return packet }
+    fun processUdp(packet: ByteArray, length: Int, strategy: DpiStrategy): ByteArray { return packet }
 }

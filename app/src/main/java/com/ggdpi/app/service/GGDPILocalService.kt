@@ -1,17 +1,17 @@
 // app/src/main/java/com/ggdpi/app/service/GGDPILocalService.kt
 package com.ggdpi.app.service
 
+import android.net.VpnService.Builder  // ← ДЛЯ addRoute()!
+import com.ggdpi.app.data.LogEntry  // ← ДЛЯ LogEntry.LogType
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.os.ParcelFileDescriptor  // ← ДОБАВИТЬ
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope  // ← ДОБАВИТЬ
 import kotlinx.coroutines.Dispatchers  // ← ДОБАВИТЬ
@@ -59,10 +59,10 @@ class GGDPILocalService : VpnService() {
     private fun startVpn(strategy: StrategyManager.DpiStrategy) {
         val builder = Builder()
             .setSession("GGDPI")
-            .addAddress(Constants.VPN_ADDRESS, Constants.VPN_SUBNET_PREFIX)
+            .addAddress(`Constants.kt`.VPN_ADDRESS, `Constants.kt`.VPN_SUBNET_PREFIX)
             .addRoute("0.0.0.0", 0)  // Перехватывать весь трафик
-            .addDnsServer(Constants.DEFAULT_DNS)
-            .setMtu(Constants.DEFAULT_MTU)
+            .addDnsServer(`Constants.kt`.DEFAULT_DNS)
+            .setMtu(`Constants.kt`.DEFAULT_MTU)
             .setBlocking(false)
 
         // Android 14+ требует explicit disallowed apps

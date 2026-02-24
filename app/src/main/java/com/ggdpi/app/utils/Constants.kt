@@ -1,7 +1,14 @@
+// app/src/main/java/com/ggdpi/app/utils/Constants.kt
 package com.ggdpi.app.utils
 
 object Constants {
-    // Списки доменов для детекции сервисов
+    // VPN настройки
+    const val VPN_ADDRESS = "10.0.0.1"
+    const val VPN_SUBNET_PREFIX = 24
+    const val DEFAULT_MTU = 1500
+    const val DEFAULT_DNS = "8.8.8.8"
+
+    // Списки доменов для детекции
     val YOUTUBE_SNIS = listOf(
         "youtube.com", "googlevideo.com", "ytimg.com",
         "youtube-nocookie.com", "youtu.be", "m.youtube.com"
@@ -34,10 +41,4 @@ object Constants {
     val TELEGRAM_IP_RANGES = listOf(
         "149.154.160.0/20", "91.108.4.0/22", "5.28.160.0/18"
     )
-
-    // Настройки по умолчанию
-    const val DEFAULT_MTU = 1500
-    const val DEFAULT_DNS = "8.8.8.8"
-    const val VPN_ADDRESS = "10.0.0.1"
-    const val VPN_SUBNET_PREFIX = 24
 }

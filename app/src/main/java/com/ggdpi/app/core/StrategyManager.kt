@@ -105,6 +105,7 @@ class StrategyManager(private val context: Context) {
 
     data class DpiStrategy(
         val id: StrategyId,
+        val name: String = "",
         val displayName: String,
         val description: String,
         val desyncMode: String,
@@ -115,4 +116,19 @@ class StrategyManager(private val context: Context) {
         val wsize: String? = null,
         val autoTtl: String? = null
     )
+    fun loadCurrentStrategy(): DpiStrategy {
+        return getDefaultStrategy()  // или вернуть первую из availableStrategies
+    }
+
+    fun getDefaultStrategy(): DpiStrategy {
+        return DpiStrategy(
+            id = StrategyId.DEFAULT,  // или просто "default" если StrategyId — enum
+            displayName = "Default",
+            description = "Default strategy",
+            desyncMode = "none",
+            splitPos = 0,
+            foolingMethods = emptyList(),
+            repeats = 1
+        )
+    }
 }

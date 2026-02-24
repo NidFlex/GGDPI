@@ -1,15 +1,21 @@
 package com.ggdpi.app.utils
 
-import java.net.Inet4Address
 import java.net.InetAddress
 
 object PacketUtils {
 
-    // Native methods (реализация в C++)
+    // Native methods
     external fun nativeUpdateIpChecksum(packet: ByteArray, headerLen: Int)
     external fun nativeUpdateTcpChecksum(packet: ByteArray, ipHeaderLen: Int, tcpHeaderLen: Int, payloadLen: Int)
 
-    // Kotlin helper: проверка IP в CIDR-диапазоне
+    // ✅ НОВЫЙ МЕТОД: извлечение порта из TCP/UDP заголовка
+    fun parsePort(packet: ByteArray, offset: Int): Int {
+        if (offset + 1 >= packet.size) return 0
+        return ((packet[offset].toInt() and 0xFF) shl 8) or
+                (packet[offset + 1].toInt() and 0xFF)
+    }
+
+    // ✅ ИСПРАВЛЕННЫЙ МЕТОД: проверка IP в CIDR
     fun isInSubnet(ip: String, cidr: String): Boolean {
         return try {
             val parts = cidr.split("/")
@@ -21,15 +27,22 @@ object PacketUtils {
 
             if (ipBytes.size != subnetBytes.size) return false
 
-            val mask = when (ipBytes.size) {
-                4 -> createIPv4Mask(prefixLength)  // IPv4
-                16 -> createIPv6Mask(prefixLength)  // IPv6
-                else -> return false
+            // Создаём маску
+            val mask = ByteArray(ipBytes.size)
+            var bits = prefixLength
+            for (i in mask.indices) {
+                val bitsInByte = minOf(8, bits)
+                mask[i] = (if (bitsInByte == 8) -1 else (-1 shl (8 - bitsInByte))).toByte()
+                bits -= bitsInByte
             }
 
-            ipBytes.zip(subnetBytes).zip(mask).all { (ips, m) ->
-                (ips.first.toInt() and 0xFF) and m == (ips.second.toInt() and 0xFF) and m
+            // Сравниваем побайтово
+            for (i in ipBytes.indices) {
+                if ((ipBytes[i].toInt() and mask[i].toInt()) != (subnetBytes[i].toInt() and mask[i].toInt())) {
+                    return false
+                }
             }
+            true
         } catch (e: Exception) {
             false
         }
@@ -57,7 +70,7 @@ object PacketUtils {
         return mask
     }
 
-    // Helper для извлечения значения из regex MatchGroup
+    // Helper для MatchGroup
     fun MatchGroup?.toLongOrNull(default: Long = 0): Long {
         return this?.value?.toLongOrNull() ?: default
     }

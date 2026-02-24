@@ -9,8 +9,6 @@ import timber.log.Timber
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.InetAddress
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong  // ← ДОБАВИТЬ
@@ -19,10 +17,8 @@ import com.ggdpi.app.core.StrategyManager.DpiStrategy
 import com.ggdpi.app.data.LogEntry
 import com.ggdpi.app.data.LogRepository
 import com.ggdpi.app.dpibypass.handlers.*
-import com.ggdpi.app.utils.Constants  // ← Без .kt!
 import com.ggdpi.app.utils.NativeDpiUtils
 import com.ggdpi.app.utils.PacketUtils
-import com.ggdpi.app.utils.PacketUtils.toLongOrNull  // ← Для исправления MatchGroup ошибки
 
 class DpiBypassEngine(
     private val vpnService: VpnService,
@@ -59,7 +55,7 @@ class DpiBypassEngine(
         this.outputStream = FileOutputStream(vpnInterface.fileDescriptor)
 
         isRunning = true
-        logRepository?.addLog("DPI Bypass Engine started with strategy: ${strategy.name}", LogEntry.LogType.INFO)
+        logRepository?.addLog("DPI Bypass Engine started with strategy: ${strategy.id}", LogEntry.LogType.INFO)
 
         // Запускаем обработку в background
         executor.submit {
@@ -107,10 +103,10 @@ class DpiBypassEngine(
             val service = detectService(sni, packet)
 
             when (service) {
-                Service.YOUTUBE -> youtubeHandler.processTcp(packet, length, strategy, sni)
-                Service.DISCORD -> discordHandler.processTcp(packet, length, strategy, sni)
-                Service.TELEGRAM -> telegramHandler.processTcp(packet, length, strategy, sni)
-                else -> genericHandler.processTcp(packet, length, strategy, sni)
+                Service.YOUTUBE -> youtubeHandler.handle(packet, length, strategy)
+                Service.DISCORD -> discordHandler.handle(packet, length, strategy)
+                Service.TELEGRAM -> telegramHandler.handle(packet, length, strategy)
+                else -> genericHandler.handle(packet, length, strategy)
             }
 
             if (service != Service.UNKNOWN) {

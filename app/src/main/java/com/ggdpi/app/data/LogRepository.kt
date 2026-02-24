@@ -1,3 +1,4 @@
+// app/src/main/java/com/ggdpi/app/data/LogRepository.kt
 package com.ggdpi.app.data
 
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -6,7 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 import java.util.concurrent.ConcurrentLinkedQueue
 
-class LogRepository {
+class LogRepository {  // ← УБРАТЬ параметр Context из конструктора
 
     private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
@@ -16,15 +17,10 @@ class LogRepository {
 
     fun addLog(message: String, type: LogEntry.LogType = LogEntry.LogType.INFO, service: String? = null) {
         val entry = LogEntry(message = message, type = type, service = service)
-
-        // Добавляем в очередь
         logQueue.offer(entry)
-
-        // Обновляем StateFlow (берём последние maxLogs)
         val updatedLogs = logQueue.toList().takeLast(maxLogs)
         _logs.value = updatedLogs
 
-        // Дублируем в Timber для отладки
         when (type) {
             LogEntry.LogType.ERROR -> Timber.e(entry.message)
             LogEntry.LogType.WARNING -> Timber.w(entry.message)
@@ -36,9 +32,5 @@ class LogRepository {
     fun clear() {
         logQueue.clear()
         _logs.value = emptyList()
-    }
-
-    fun getLogsByType(type: LogEntry.LogType): List<LogEntry> {
-        return logQueue.filter { it.type == type }
     }
 }
