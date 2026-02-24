@@ -1,0 +1,7 @@
+[
+{
+  "directory": "C:/GGDPI/app/.cxx/Debug/5k1p6gy5/arm64-v8a",
+  "command": "C:\\Users\\dnago\\AppData\\Local\\Android\\Sdk\\ndk\\25.2.9519653\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang++.exe --target=aarch64-none-linux-android26 --sysroot=C:/Users/dnago/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/sysroot -Dggdpi_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -O3 -fPIC -fno-limit-debug-info  -fPIC -std=gnu++17 -o CMakeFiles\\ggdpi.dir\\sni-extractor.cpp.o -c C:\\GGDPI\\app\\src\\main\\cpp\\sni-extractor.cpp",
+  "file": "C:\\GGDPI\\app\\src\\main\\cpp\\sni-extractor.cpp"
+}
+]

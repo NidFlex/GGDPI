@@ -1,0 +1,3 @@
+C:/GGDPI/app/.cxx/Debug/5k1p6gy5/armeabi-v7a/CMakeFiles/ggdpi.dir
+C:/GGDPI/app/.cxx/Debug/5k1p6gy5/armeabi-v7a/CMakeFiles/edit_cache.dir
+C:/GGDPI/app/.cxx/Debug/5k1p6gy5/armeabi-v7a/CMakeFiles/rebuild_cache.dir

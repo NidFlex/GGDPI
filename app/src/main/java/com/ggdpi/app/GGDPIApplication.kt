@@ -1,5 +1,6 @@
 package com.ggdpi.app
 
+import com.ggdpi.app.BuildConfig
 import android.app.Application
 import timber.log.Timber
 

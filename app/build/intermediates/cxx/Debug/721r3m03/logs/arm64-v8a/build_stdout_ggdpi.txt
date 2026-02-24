@@ -1,0 +1,3 @@
+ninja: Entering directory `C:\GGDPI\app\.cxx\Debug\721r3m03\arm64-v8a'
+[1/2] Building CXX object CMakeFiles/ggdpi.dir/sni-extractor.cpp.o
+[2/2] Linking CXX shared library C:\GGDPI\app\build\intermediates\cxx\Debug\721r3m03\obj\arm64-v8a\libggdpi.so

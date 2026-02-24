@@ -61,15 +61,18 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        // ✅ Опции для стабильности компиляции
         freeCompilerArgs += listOf(
             "-opt-in=kotlin.RequiresOptIn",
-            "-Xcontext-receivers" // если используете context receivers
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+            "-opt-in=androidx.compose.animation.ExperimentalAnimationApi",
+            "-Xcontext-receivers"
         )
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
         // ✅ Включите viewBinding если нужно
         // viewBinding = true
     }
@@ -93,16 +96,21 @@ android {
             excludes += "lib/x86/**"
             excludes += "lib/x86_64/**"
         }
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
 dependencies {
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.activity:activity-compose:1.8.1")
 
     // Compose BOM — управление версиями
-    val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
+    val composeBom = platform("androidx.compose:compose-bom:2024.04.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -110,7 +118,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material:material-icons-extended:1.6.0")
 
     implementation("androidx.navigation:navigation-compose:2.7.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
