@@ -1,49 +1,64 @@
 package com.ggdpi.app.utils
 
+import java.net.Inet4Address
+import java.net.InetAddress
+
 object PacketUtils {
 
-    fun parseIPv4Address(packet: ByteArray, offset: Int): String {
-        return "${packet[offset].toInt() and 0xFF}.${packet[offset + 1].toInt() and 0xFF}." +
-               "${packet[offset + 2].toInt() and 0xFF}.${packet[offset + 3].toInt() and 0xFF}"
-    }
+    // Native methods (реализация в C++)
+    external fun nativeUpdateIpChecksum(packet: ByteArray, headerLen: Int)
+    external fun nativeUpdateTcpChecksum(packet: ByteArray, ipHeaderLen: Int, tcpHeaderLen: Int, payloadLen: Int)
 
-    fun parsePort(packet: ByteArray, offset: Int): Int {
-        return ((packet[offset].toInt() and 0xFF) shl 8) or 
-               (packet[offset + 1].toInt() and 0xFF)
-    }
-
+    // Kotlin helper: проверка IP в CIDR-диапазоне
     fun isInSubnet(ip: String, cidr: String): Boolean {
-        val (subnet, bits) = cidr.split("/")
-        val mask = (0xFFFFFFFF shl (32 - bits.toInt())) and 0xFFFFFFFF
-        
-        val ipLong = ipToLong(ip)
-        val subnetLong = ipToLong(subnet)
-        
-        return (ipLong and mask) == (subnetLong and mask)
+        return try {
+            val parts = cidr.split("/")
+            val subnetAddress = InetAddress.getByName(parts[0])
+            val prefixLength = parts[1].toInt()
+
+            val ipBytes = InetAddress.getByName(ip).address
+            val subnetBytes = subnetAddress.address
+
+            if (ipBytes.size != subnetBytes.size) return false
+
+            val mask = when (ipBytes.size) {
+                4 -> createIPv4Mask(prefixLength)  // IPv4
+                16 -> createIPv6Mask(prefixLength)  // IPv6
+                else -> return false
+            }
+
+            ipBytes.zip(subnetBytes).zip(mask).all { (ips, m) ->
+                (ips.first.toInt() and 0xFF) and m == (ips.second.toInt() and 0xFF) and m
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
-    private fun ipToLong(ip: String): Long {
-        return ip.split(".").fold(0L) { acc, octet ->
-            (acc shl 8) or octet.toLong()
+    private fun createIPv4Mask(prefixLength: Int): IntArray {
+        val mask = IntArray(4)
+        var bits = prefixLength
+        for (i in 0 until 4) {
+            val bitsInOctet = minOf(8, bits)
+            mask[i] = if (bitsInOctet == 8) 0xFF else (0xFF shl (8 - bitsInOctet)) and 0xFF
+            bits -= bitsInOctet
         }
+        return mask
     }
 
-    fun updateIpChecksum(packet: ByteArray, headerLen: Int) {
-        packet[10] = 0
-        packet[11] = 0
-        
-        var sum = 0
-        for (i in 0 until headerLen step 2) {
-            sum += ((packet[i].toInt() and 0xFF) shl 8) or 
-                   (packet[i + 1].toInt() and 0xFF)
+    private fun createIPv6Mask(prefixLength: Int): IntArray {
+        val mask = IntArray(16)
+        var bits = prefixLength
+        for (i in 0 until 16) {
+            val bitsInOctet = minOf(8, bits)
+            mask[i] = if (bitsInOctet == 8) 0xFF else (0xFF shl (8 - bitsInOctet)) and 0xFF
+            bits -= bitsInOctet
         }
-        
-        while (sum shr 16 != 0) {
-            sum = (sum and 0xFFFF) + (sum shr 16)
-        }
-        
-        val checksum = sum.inv() and 0xFFFF
-        packet[10] = (checksum shr 8).toByte()
-        packet[11] = (checksum and 0xFF).toByte()
+        return mask
+    }
+
+    // Helper для извлечения значения из regex MatchGroup
+    fun MatchGroup?.toLongOrNull(default: Long = 0): Long {
+        return this?.value?.toLongOrNull() ?: default
     }
 }

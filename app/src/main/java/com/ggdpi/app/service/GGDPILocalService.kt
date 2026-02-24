@@ -1,33 +1,41 @@
+// app/src/main/java/com/ggdpi/app/service/GGDPILocalService.kt
 package com.ggdpi.app.service
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
+import android.os.Binder
 import android.os.Build
-import android.os.ParcelFileDescriptor
+import android.os.IBinder
+import android.os.ParcelFileDescriptor  // ← ДОБАВИТЬ
 import androidx.core.app.NotificationCompat
-import com.ggdpi.app.MainActivity
+import kotlinx.coroutines.CoroutineScope  // ← ДОБАВИТЬ
+import kotlinx.coroutines.Dispatchers  // ← ДОБАВИТЬ
+import kotlinx.coroutines.SupervisorJob  // ← ДОБАВИТЬ
+import kotlinx.coroutines.cancel
 import com.ggdpi.app.R
 import com.ggdpi.app.core.StrategyManager
-import com.ggdpi.app.dpibypass.DpiBypassEngine
-import kotlinx.coroutines.*
+import com.ggdpi.app.data.LogRepository
+import com.ggdpi.app.dpibypass.DpiBypassEngine  // ← Без .kt!
+import com.ggdpi.app.ui.MainActivity  // ← Убедитесь, что файл существует
 import timber.log.Timber
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.nio.ByteBuffer
 
 class GGDPILocalService : VpnService() {
 
-    private var vpnInterface: ParcelFileDescriptor? = null
-    private var bypassEngine: DpiBypassEngine? = null
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var isRunning = false
+    private val binder = LocalBinder()
+    private var bypassEngine: DpiBypassEngine? = null  // ← Без .kt!
+    private val logRepository = LogRepository()
+    private val strategyManager = StrategyManager()
 
-    companion object {
-        const val NOTIFICATION_CHANNEL_ID = "ggdpi_local_bypass"
-        const val NOTIFICATION_ID = 1
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)  // ← Исправлено
+
+    inner class LocalBinder : Binder() {
+        fun getService(): GGDPILocalService = this@GGDPILocalService
+        fun getLogRepository(): LogRepository = logRepository
     }
 
     override fun onCreate() {
@@ -37,115 +45,110 @@ class GGDPILocalService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            "START_LOCAL_BYPASS" -> startLocalBypass()
-            "STOP_LOCAL_BYPASS" -> stopLocalBypass()
+            ACTION_START -> {
+                val strategy = strategyManager.loadCurrentStrategy()
+                startVpn(strategy)
+            }
+            ACTION_STOP -> {
+                stopVpn()
+            }
         }
         return START_STICKY
     }
 
-    private fun startLocalBypass() {
-        if (isRunning) return
-        
-        isRunning = true
-        startForeground(NOTIFICATION_ID, buildNotification("Starting DPI bypass..."))
+    private fun startVpn(strategy: StrategyManager.DpiStrategy) {
+        val builder = Builder()
+            .setSession("GGDPI")
+            .addAddress(Constants.VPN_ADDRESS, Constants.VPN_SUBNET_PREFIX)
+            .addRoute("0.0.0.0", 0)  // Перехватывать весь трафик
+            .addDnsServer(Constants.DEFAULT_DNS)
+            .setMtu(Constants.DEFAULT_MTU)
+            .setBlocking(false)
 
-        serviceScope.launch {
-            try {
-                establishLocalVpn()
-                startBypassEngine()
-                updateNotification("DPI Bypass Active - ${getCurrentStrategyName()}")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start local bypass")
-                stopLocalBypass()
-            }
-        }
-    }
-
-    private fun establishLocalVpn() {
-        val builder = Builder().apply {
-            setSession("GGDPI-Local")
-            addAddress("10.200.200.1", 24)
-            addDnsServer("1.1.1.1")
-            addDnsServer("8.8.8.8")
-            addRoute("0.0.0.0", 0)
-            addRoute("::", 0)
-            setMtu(1400)
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                allowBypass()
-            }
+        // Android 14+ требует explicit disallowed apps
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Можно добавить excludeApps если нужно
         }
 
-        vpnInterface = builder.establish()
-            ?: throw IllegalStateException("Failed to establish VPN interface")
-        
-        Timber.i("Local VPN interface established")
-    }
+        try {
+            val vpnInterface = builder.establish() ?: throw IllegalStateException("Failed to establish VPN")
 
-    private fun startBypassEngine() {
-        vpnInterface?.let { iface ->
-            bypassEngine = DpiBypassEngine(
-                vpnInterface = iface,
-                strategyManager = StrategyManager(applicationContext),
-                scope = serviceScope,
-                onPacketProcessed = { count ->
-                    if (count % 1000 == 0L) {
-                        updateNotification("Processed $count packets")
-                    }
+            // Запускаем notification
+            startForeground(NOTIFICATION_ID, createNotification(),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    0
                 }
             )
-            bypassEngine?.start()
+
+            // Инициализируем и запускаем engine
+            bypassEngine = DpiBypassEngine(this, strategyManager, logRepository)
+            bypassEngine?.start(vpnInterface, strategy)
+
+            logRepository.addLog("VPN started with strategy: ${strategy.name}", LogEntry.LogType.INFO)
+
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to start VPN")
+            logRepository.addLog("VPN start failed: ${e.message}", LogEntry.LogType.ERROR)
+            stopSelf()
         }
     }
 
-    private fun stopLocalBypass() {
-        isRunning = false
+    private fun stopVpn() {
         bypassEngine?.stop()
         bypassEngine = null
-        vpnInterface?.close()
-        vpnInterface = null
+
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
-        Timber.i("Local DPI bypass stopped")
-    }
 
-    private fun getCurrentStrategyName(): String {
-        return StrategyManager(applicationContext).getCurrentStrategy().displayName
+        logRepository.addLog("VPN stopped", LogEntry.LogType.INFO)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "GGDPI Local Bypass",
+                CHANNEL_ID,
+                "GGDPI Service",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Local DPI bypass service"
+                description = "DPI Bypass Service"
+                lockscreenVisibility = NotificationCompat.VISIBILITY_SECRET
             }
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(text: String) = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-        .setContentTitle("GGDPI Local Bypass")
-        .setContentText(text)
-        .setSmallIcon(R.drawable.ic_vpn)
-        .setContentIntent(
-            PendingIntent.getActivity(
-                this, 0, Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE
-            )
+    private fun createNotification(): android.app.Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),  // ← MainActivity должна существовать
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        .setOngoing(true)
-        .build()
 
-    private fun updateNotification(text: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm?.notify(NOTIFICATION_ID, buildNotification(text))
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("GGDPI Active")
+            .setContentText("DPI bypass is running")
+            .setSmallIcon(R.drawable.ic_vpn)  // Убедитесь, что иконка существует
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
     }
 
+    override fun onBind(intent: Intent?): IBinder = binder
+
     override fun onDestroy() {
-        super.onDestroy()
         serviceScope.cancel()
+        stopVpn()
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "ggdpi_service_channel"
+        private const val NOTIFICATION_ID = 1001
+        const val ACTION_START = "com.ggdpi.app.service.START"
+        const val ACTION_STOP = "com.ggdpi.app.service.STOP"
     }
 }

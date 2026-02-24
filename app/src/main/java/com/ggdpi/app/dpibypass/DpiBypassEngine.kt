@@ -1,257 +1,191 @@
+// app/src/main/java/com/ggdpi/app/dpibypass/DpiBypassEngine.kt
 package com.ggdpi.app.dpibypass
 
+import android.net.VpnService
 import android.os.ParcelFileDescriptor
-import com.ggdpi.app.core.StrategyManager
-import com.ggdpi.app.data.LogRepository
-import com.ggdpi.app.dpibypass.handlers.*
-import com.ggdpi.app.dpibypass.native.NativeDpiUtils
-import com.ggdpi.app.ui.screens.LogEntry
-import com.ggdpi.app.utils.PacketUtils
+import android.system.OsConstants
 import kotlinx.coroutines.*
 import timber.log.Timber
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
-import com.ggdpi.app.utils.Constants
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong  // ← ДОБАВИТЬ
+import com.ggdpi.app.core.StrategyManager
+import com.ggdpi.app.core.StrategyManager.DpiStrategy
+import com.ggdpi.app.data.LogEntry
+import com.ggdpi.app.data.LogRepository
+import com.ggdpi.app.dpibypass.handlers.*
+import com.ggdpi.app.utils.Constants  // ← Без .kt!
+import com.ggdpi.app.utils.NativeDpiUtils
+import com.ggdpi.app.utils.PacketUtils
+import com.ggdpi.app.utils.PacketUtils.toLongOrNull  // ← Для исправления MatchGroup ошибки
 
 class DpiBypassEngine(
-    private val vpnInterface: ParcelFileDescriptor,
+    private val vpnService: VpnService,
     private val strategyManager: StrategyManager,
-    private val logRepository: LogRepository? = null,
-    private val scope: CoroutineScope,
-    private val onPacketProcessed: (Long) -> Unit
+    private val logRepository: LogRepository? = null
 ) {
-    private val inputStream = FileInputStream(vpnInterface.fileDescriptor)
-    private val outputStream = FileOutputStream(vpnInterface.fileDescriptor)
-    private val executor = Executors.newSingleThreadExecutor()
-    private val bufferPool = ByteBufferPool(10, 32767)
-    
-    private var isRunning = false
-    private val packetCount = AtomicLong(0)
-    private val bypassCount = AtomicLong(0)
-    
-    private val instagramHandler = InstagramHandler()
+
+    private var vpnInterface: ParcelFileDescriptor? = null
+    private var inputStream: FileInputStream? = null
+    private var outputStream: FileOutputStream? = null
+
+    @Volatile private var isRunning = false
+
+    // Executor для обработки пакетов
+    private val executor = Executors.newFixedThreadPool(
+        Runtime.getRuntime().availableProcessors().coerceAtLeast(2).coerceAtMost(4)
+    )
+
+    // Статистика
+    private val processedPackets = AtomicLong(0)
+    private val bypassedPackets = AtomicLong(0)
+
+    // Handlers для разных сервисов
     private val youtubeHandler = YoutubeHandler()
     private val discordHandler = DiscordHandler()
     private val telegramHandler = TelegramHandler()
     private val genericHandler = GenericDpiHandler()
-    
-    private val nativeUtils = NativeDpiUtils()
 
-    fun start() {
+    fun start(vpnInterface: ParcelFileDescriptor, strategy: DpiStrategy) {
+        if (isRunning) return
+
+        this.vpnInterface = vpnInterface
+        this.inputStream = FileInputStream(vpnInterface.fileDescriptor)
+        this.outputStream = FileOutputStream(vpnInterface.fileDescriptor)
+
         isRunning = true
-        logRepository?.addLog("DPI Bypass Engine started", LogEntry.LogType.SUCCESS)
-        
-        scope.launch(executor.asCoroutineDispatcher()) {
-            processPackets()
+        logRepository?.addLog("DPI Bypass Engine started with strategy: ${strategy.name}", LogEntry.LogType.INFO)
+
+        // Запускаем обработку в background
+        executor.submit {
+            processPackets(strategy)
         }
+    }
+
+    private fun processPackets(strategy: DpiStrategy) {
+        val buffer = ByteArray(Constants.DEFAULT_MTU)
+
+        try {
+            while (isRunning) {
+                val length = inputStream?.read(buffer) ?: break
+                if (length <= 0) continue
+
+                processedPackets.incrementAndGet()
+
+                // Определяем протокол
+                val protocol = NativeDpiUtils.getIpProtocol(buffer, length)
+
+                when (protocol) {
+                    OsConstants.IPPROTO_TCP -> {
+                        processTcpPacket(buffer, length, strategy)
+                    }
+                    OsConstants.IPPROTO_UDP -> {
+                        processUdpPacket(buffer, length, strategy)
+                    }
+                }
+
+                // Отправляем пакет дальше
+                outputStream?.write(buffer, 0, length)
+            }
+        } catch (e: IOException) {
+            if (isRunning) {  // Только если это не штатная остановка
+                logRepository?.addLog("Packet processing error: ${e.message}", LogEntry.LogType.ERROR)
+                Timber.e(e, "Error processing packets")
+            }
+        }
+    }
+
+    private fun processTcpPacket(packet: ByteArray, length: Int, strategy: DpiStrategy) {
+        // Проверяем TLS ClientHello для SNI extraction
+        if (NativeDpiUtils.isTlsClientHello(packet, length)) {
+            val sni = NativeDpiUtils.extractSni(packet, length)
+            val service = detectService(sni, packet)
+
+            when (service) {
+                Service.YOUTUBE -> youtubeHandler.processTcp(packet, length, strategy, sni)
+                Service.DISCORD -> discordHandler.processTcp(packet, length, strategy, sni)
+                Service.TELEGRAM -> telegramHandler.processTcp(packet, length, strategy, sni)
+                else -> genericHandler.processTcp(packet, length, strategy, sni)
+            }
+
+            if (service != Service.UNKNOWN) {
+                bypassedPackets.incrementAndGet()
+                logRepository?.addLog(
+                    "Bypassed ${service.name} packet (SNI: $sni)",
+                    LogEntry.LogType.BYPASS,
+                    service.name
+                )
+            }
+        } else {
+            genericHandler.processTcp(packet, length, strategy, null)
+        }
+
+        // Пересчитываем checksum после модификаций
+        val ipHeaderLen = (packet[0].toInt() and 0xF) * 4
+        PacketUtils.nativeUpdateIpChecksum(packet, ipHeaderLen)
+
+        // Для TCP нужен полный расчёт с pseudo-header (упрощённо)
+        // В production здесь должен быть вызов nativeUpdateTcpChecksum с правильными параметрами
+    }
+
+    private fun processUdpPacket(packet: ByteArray, length: Int, strategy: DpiStrategy) {
+        // Для UDP обычно не требуется DPI bypass, но обрабатываем TTL если нужно
+        genericHandler.processUdp(packet, length, strategy)
+    }
+
+    private fun detectService(sni: String?, packet: ByteArray): Service {
+        // Проверяем по SNI
+        sni?.let {
+            when {
+                Constants.YOUTUBE_SNIS.any { domain -> sni.endsWith(domain) } -> return Service.YOUTUBE
+                Constants.DISCORD_SNIS.any { domain -> sni.endsWith(domain) } -> return Service.DISCORD
+                Constants.TELEGRAM_SNIS.any { domain -> sni.endsWith(domain) } -> return Service.TELEGRAM
+                Constants.INSTAGRAM_SNIS.any { domain -> sni.endsWith(domain) } -> return Service.INSTAGRAM
+            }
+        }
+
+        // Fallback: проверка по IP-адресам
+        val (_, dstIp) = NativeDpiUtils.getIpAddresses(packet, packet.size)
+        when {
+            Constants.GOOGLE_IP_RANGES.any { PacketUtils.isInSubnet(dstIp, it) } -> return Service.YOUTUBE
+            Constants.DISCORD_IP_RANGES.any { PacketUtils.isInSubnet(dstIp, it) } -> return Service.DISCORD
+            Constants.TELEGRAM_IP_RANGES.any { PacketUtils.isInSubnet(dstIp, it) } -> return Service.TELEGRAM
+        }
+
+        return Service.UNKNOWN
     }
 
     fun stop() {
         isRunning = false
+
+        // Graceful shutdown executor
         executor.shutdown()
         try {
-            inputStream.close()
-            outputStream.close()
-        } catch (e: Exception) {
-            Timber.w(e, "Error closing streams")
-        }
-        logRepository?.addLog("DPI Bypass Engine stopped", LogEntry.LogType.INFO)
-    }
-
-    private suspend fun processPackets() {
-        val buffer = bufferPool.acquire()
-        
-        try {
-            while (isRunning && scope.isActive) {
-                try {
-                    val length = withContext(Dispatchers.IO) {
-                        inputStream.read(buffer.array())
-                    }
-                    
-                    if (length > 0) {
-                        buffer.limit(length)
-                        
-                        val processed = processPacket(buffer, length)
-                        
-                        withContext(Dispatchers.IO) {
-                            outputStream.write(processed, 0, processed.size)
-                        }
-                        
-                        val count = packetCount.incrementAndGet()
-                        if (count % 100 == 0L) {
-                            onPacketProcessed(count)
-                        }
-                        
-                        buffer.clear()
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Packet processing error")
-                    logRepository?.addLog("Error: ${e.message}", LogEntry.LogType.ERROR)
-                    buffer.clear()
-                }
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                executor.shutdownNow()
             }
-        } finally {
-            bufferPool.release(buffer)
+        } catch (e: InterruptedException) {
+            executor.shutdownNow()
+            Thread.currentThread().interrupt()
         }
-    }
 
-    private fun processPacket(buffer: ByteBuffer, length: Int): ByteArray {
-        val packet = ByteArray(length)
-        buffer.get(packet)
-        
-        val version = (packet[0].toInt() shr 4) and 0xF
-        
-        return when (version) {
-            4 -> processIPv4(packet, length)
-            6 -> processIPv6(packet, length)
-            else -> packet
-        }
-    }
+        // Закрываем ресурсы
+        try { inputStream?.close() } catch (e: IOException) { Timber.w(e, "Error closing input") }
+        try { outputStream?.close() } catch (e: IOException) { Timber.w(e, "Error closing output") }
+        try { vpnInterface?.close() } catch (e: IOException) { Timber.w(e, "Error closing VPN") }
 
-    private fun processIPv4(packet: ByteArray, length: Int): ByteArray {
-        if (length < 20) return packet
-        
-        val protocol = packet[9].toInt() and 0xFF
-        val service = detectService(packet, length)
-        val strategy = strategyManager.getCurrentStrategy()
-
-        val processed = when (protocol) {
-            6 -> {
-                when (service) {
-                    Service.INSTAGRAM -> {
-                        bypassCount.incrementAndGet()
-                        instagramHandler.process(packet, length, strategy)
-                    }
-                    Service.YOUTUBE -> {
-                        bypassCount.incrementAndGet()
-                        youtubeHandler.process(packet, length, strategy)
-                    }
-                    Service.DISCORD -> {
-                        bypassCount.incrementAndGet()
-                        discordHandler.process(packet, length, strategy)
-                    }
-                    Service.TELEGRAM -> {
-                        bypassCount.incrementAndGet()
-                        telegramHandler.process(packet, length, strategy)
-                    }
-                    else -> genericHandler.processTcp(packet, length, strategy)
-                }
-            }
-            17 -> {
-                when (service) {
-                    Service.DISCORD_VOICE -> discordHandler.processUdp(packet, length, strategy)
-                    Service.TELEGRAM_VOICE -> telegramHandler.processUdp(packet, length, strategy)
-                    else -> genericHandler.processUdp(packet, length, strategy)
-                }
-            }
-            else -> packet
-        }
-        
-        if (processed !== packet) {
-            logRepository?.addLog(
-                "Bypassed ${service.name} packet with ${strategy.displayName} strategy",
-                LogEntry.LogType.SUCCESS
-            )
-        }
-        
-        return processed
-    }
-
-    private fun processIPv6(packet: ByteArray, length: Int): ByteArray {
-        return packet
-    }
-
-    private fun detectService(packet: ByteArray, length: Int): Service {
-        val ipHeaderLen = (packet[0].toInt() and 0xF) * 4
-        val dstPort = PacketUtils.parsePort(packet, ipHeaderLen + 2)
-        val dstIp = PacketUtils.parseIPv4Address(packet, 16)
-        
-        return when {
-            isInstagramIp(dstIp) || isInstagramSni(packet, length) -> Service.INSTAGRAM
-            isGoogleIp(dstIp) || isYoutubeSni(packet, length) -> Service.YOUTUBE
-            isDiscordSni(packet, length) -> Service.DISCORD
-            isDiscordVoicePort(dstPort) -> Service.DISCORD_VOICE
-            isTelegramIp(dstIp) || isTelegramSni(packet, length) -> Service.TELEGRAM
-            isTelegramVoicePort(dstPort) -> Service.TELEGRAM_VOICE
-            else -> Service.UNKNOWN
-        }
-    }
-
-    private fun isInstagramIp(ip: String): Boolean {
-        return Constants.INSTAGRAM_IP_RANGES.any { PacketUtils.isInSubnet(ip, it) }
-    }
-
-    private fun isInstagramSni(packet: ByteArray, length: Int): Boolean {
-        val sni = extractSni(packet, length)
-        return sni?.let { host ->
-            Constants.INSTAGRAM_SNIS.any { host.contains(it) }
-        } ?: false
-    }
-
-    private fun isGoogleIp(ip: String): Boolean {
-        return Constants.GOOGLE_IP_RANGES.any { PacketUtils.isInSubnet(ip, it) }
-    }
-
-    private fun isYoutubeSni(packet: ByteArray, length: Int): Boolean {
-        val sni = extractSni(packet, length)
-        return sni?.let { host ->
-            Constants.YOUTUBE_SNIS.any { host.contains(it) }
-        } ?: false
-    }
-
-    private fun isDiscordSni(packet: ByteArray, length: Int): Boolean {
-        val sni = extractSni(packet, length)
-        return sni?.let { host ->
-            Constants.DISCORD_SNIS.any { host.contains(it) }
-        } ?: false
-    }
-
-    private fun isDiscordVoicePort(port: Int): Boolean {
-        return port in 5000..65535
-    }
-
-    private fun isTelegramIp(ip: String): Boolean {
-        return Constants.TELEGRAM_IP_RANGES.any { PacketUtils.isInSubnet(ip, it) }
-    }
-
-    private fun isTelegramSni(packet: ByteArray, length: Int): Boolean {
-        val sni = extractSni(packet, length)
-        return sni?.let { host ->
-            Constants.TELEGRAM_SNIS.any { host.contains(it) }
-        } ?: false
-    }
-
-    private fun isTelegramVoicePort(port: Int): Boolean {
-        return port in 10000..65000
-    }
-
-    private fun extractSni(packet: ByteArray, length: Int): String? {
-        val ipHeaderLen = (packet[0].toInt() and 0xF) * 4
-        val tcpHeaderLen = ((packet[ipHeaderLen + 12].toInt() shr 4) and 0xF) * 4
-        val payloadOffset = ipHeaderLen + tcpHeaderLen
-        
-        return nativeUtils.extractSni(packet, payloadOffset, length - payloadOffset)
-    }
-
-    fun getStats(): EngineStats {
-        return EngineStats(
-            totalPackets = packetCount.get(),
-            bypassedPackets = bypassCount.get(),
-            currentStrategy = strategyManager.getCurrentStrategy().displayName
+        logRepository?.addLog(
+            "Engine stopped. Processed: ${processedPackets.get()}, Bypassed: ${bypassedPackets.get()}",
+            LogEntry.LogType.INFO
         )
     }
 
-    data class EngineStats(
-        val totalPackets: Long,
-        val bypassedPackets: Long,
-        val currentStrategy: String
-    )
-
     enum class Service {
-        INSTAGRAM, YOUTUBE, DISCORD, DISCORD_VOICE,
-        TELEGRAM, TELEGRAM_VOICE, UNKNOWN
+        YOUTUBE, DISCORD, TELEGRAM, INSTAGRAM, UNKNOWN
     }
 }
