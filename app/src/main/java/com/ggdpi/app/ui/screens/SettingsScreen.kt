@@ -12,10 +12,10 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onAutoStartChanged: (Boolean) -> Unit,
     onDebugModeChanged: (Boolean) -> Unit,
-    autoStart: Boolean = false,
-    debugMode: Boolean = false
+    onCustomHostsUpdateUrlChanged: (String) -> Unit,
+    debugMode: Boolean = false,
+    customHostsUpdateUrl: String = ""
 ) {
     Scaffold(
         topBar = {
@@ -35,19 +35,6 @@ fun SettingsScreen(
                 .padding(padding)
         ) {
             ListItem(
-                headlineContent = { Text("Auto-start on boot") },
-                supportingContent = { Text("Automatically start DPI bypass after device boot") },
-                trailingContent = {
-                    Switch(
-                        checked = autoStart,
-                        onCheckedChange = onAutoStartChanged
-                    )
-                }
-            )
-            
-            Divider()
-            
-            ListItem(
                 headlineContent = { Text("Debug mode") },
                 supportingContent = { Text("Enable detailed logging") },
                 trailingContent = {
@@ -58,6 +45,25 @@ fun SettingsScreen(
                 }
             )
             
+            Divider()
+
+            Text(
+                text = "Lists",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(16.dp)
+            )
+
+            OutlinedTextField(
+                value = customHostsUpdateUrl,
+                onValueChange = onCustomHostsUpdateUrlChanged,
+                label = { Text("Custom hosts update URL") },
+                supportingText = { Text("Used when you press “Update” in Custom Hosts") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            )
+
             Divider()
             
             // Stats section

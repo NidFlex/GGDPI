@@ -12,11 +12,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostListScreen(
     hosts: List<String>,
+    updateUrl: String,
+    lastUpdatedEpochMs: Long,
+    isUpdating: Boolean,
+    updateError: String?,
+    onUpdate: () -> Unit,
     onAddHost: (String) -> Unit,
     onRemoveHost: (String) -> Unit,
     onBack: () -> Unit
@@ -34,6 +42,19 @@ fun HostListScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onUpdate,
+                        enabled = !isUpdating && updateUrl.isNotBlank()
+                    ) {
+                        if (isUpdating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Update List")
+                        }
+                    }
                     IconButton(onClick = { showAddDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = "Add Host")
                     }
@@ -52,6 +73,38 @@ fun HostListScreen(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(16.dp)
                 )
+            }
+
+            item {
+                val lastUpdated = remember(lastUpdatedEpochMs) {
+                    if (lastUpdatedEpochMs <= 0L) {
+                        "Never"
+                    } else {
+                        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                            .format(Date(lastUpdatedEpochMs))
+                    }
+                }
+
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(
+                        text = "Update URL: ${if (updateUrl.isBlank()) "Not set" else updateUrl}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Last updated: $lastUpdated",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    updateError?.takeIf { it.isNotBlank() }?.let { err ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
             
             items(hosts) { host ->
